@@ -1,0 +1,26 @@
+{
+    "configurations": [
+        {
+            "name": "door_status_checker",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "D:\\Projects\\esp32\\esp-idf\\components\\**",
+                "D:\\Projects\\esp32\\esp-idf\\components\\freertos\\FreeRTOS-Kernel\\portable\\xtensa\\include\\freertos\\**",
+                "D:\\Projects\\esp32\\esp-idf\\components\\freertos\\FreeRTOS-Kernel\\include\\freertos\\**",
+                "D:/Projects/esp32/esp-idf/components/freertos/FreeRTOS-Kernel-SMP/portable/linux/include/freertos",
+                "D:/Projects/esp32/esp-idf/components/esp_hw_support/include",
+                "D:/Projects/esp32/esp-idf/components/riscv/include",
+                "D:/Projects/esp32/esp-idf/components/soc/esp32c2/include",
+                "D:/Projects/esp32/esp-idf/components/soc/esp32c2/register"
+            ],
+            "compilerPath": "C:/mingw64/bin/gcc.exe",
+            "cStandard": "${default}",
+            "cppStandard": "${default}",
+            "intelliSenseMode": "windows-gcc-x64",
+            "compilerArgs": [
+                ""
+            ]
+        }
+    ],
+    "version": 4
+}
