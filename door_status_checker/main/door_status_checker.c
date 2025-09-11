@@ -9,23 +9,102 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "soc/clk_tree_defs.h"
+#include "esp_timer.h"
 
 // Defines and constants
 #define LED_PIN         32
 #define SENSOR_PIN      26
 
+// IR Sensor
+#define IR_SENSOR_SECONDS_FOR_STATUS_CHANGE     5
+#define IR_SENSOR_US_FOR_STATUS_CHANGE          IR_SENSOR_SECONDS_FOR_STATUS_CHANGE * 1000000
+
 // TASKS time definition
 #define IR_SENSOR_TASK_TIME         100
 #define BLINKING_LED_TASK_TIME      500
 
+// Structs definition
+typedef enum
+{
+    CLOSED,
+    OPEN
+}ir_sensor_status_type;
+
+typedef struct
+{
+    ir_sensor_status_type current_status;
+    int status_change_counter;
+    int last_change_timestamp;
+    bool computing_new_status;
+}ir_sensor_data_t;
 
 //******************************************************************/
 //********************** TASK IR SENSOR ****************************/
 //******************************************************************/
+int compute_time_diff(int old_timestamp)
+{
+    int new_time = esp_timer_get_time();
+    if(new_time >= old_timestamp)
+    {
+        return new_time - old_timestamp;
+    }
+    else
+    {
+        return INT_MAX - old_timestamp + new_time;
+    }
+}
 void ir_sensor_task(void *pv_parameters)
 {
+    // '1' is object not detected
+    // '0' is object detected
+    ir_sensor_data_t ir_sensor_data;
+    ir_sensor_data.current_status = gpio_get_level(SENSOR_PIN);
+    ir_sensor_data.last_change_timestamp = esp_timer_get_time();
+    ir_sensor_data.computing_new_status = false;
     while(1)
     {
+        if(ir_sensor_data.computing_new_status == false)
+        {
+            // Detect change
+            uint8_t new_level = gpio_get_level(SENSOR_PIN);
+            if(new_level != ir_sensor_data.current_status)
+            {
+                ir_sensor_data.last_change_timestamp = esp_timer_get_time();
+                ir_sensor_data.computing_new_status = true;
+                ir_sensor_data.status_change_counter = 0;
+                ESP_LOGI("IR_SENSOR_TASK", "Starting computing...");
+
+            }
+        }
+        else
+        {
+            if(gpio_get_level(SENSOR_PIN) == OPEN)
+            {
+                ir_sensor_data.status_change_counter++;
+            }
+            else
+            {
+                ir_sensor_data.status_change_counter--;
+            }
+
+            if(compute_time_diff(ir_sensor_data.last_change_timestamp) >= IR_SENSOR_US_FOR_STATUS_CHANGE)
+            {
+                ir_sensor_data.computing_new_status = false;
+                ir_sensor_data.last_change_timestamp = esp_timer_get_time();
+                if(ir_sensor_data.status_change_counter >= 0)
+                {
+                    ir_sensor_data.current_status = OPEN;
+                }
+                else
+                {
+                    ir_sensor_data.current_status = CLOSED;
+                }
+                ESP_LOGI("IR_SENSOR_TASK", "Result: %d\n", ir_sensor_data.current_status);
+
+            }
+        }
+        
+        // ESP_LOGI("IR_SENSOR_TASK", "LEVEL: %d\n", ir_sensor_data.current_status);
         vTaskDelay(pdMS_TO_TICKS(IR_SENSOR_TASK_TIME));
     }
 }
@@ -64,17 +143,10 @@ static void init_config(void)
 
 void app_main(void)
 {
+    // INIT GPIO and peripherals
     init_config();
     
+    // Start the tasks to run
     xTaskCreate(led_blinking_task, "Blink Task", 2048, NULL, 1, NULL);
     xTaskCreate(ir_sensor_task, "IR Sensor Task", 2048, NULL, 5, NULL);
-
-    // while(1)
-    // {   
-
-    //     // Read the IR sensor value
-    //     uint8_t level = gpio_get_level(SENSOR_PIN);
-    //     ESP_LOGI(our_task_name, "LEVEL: %d\n", level);
-        
-    // }
 }
