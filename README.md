@@ -13,6 +13,7 @@ The system will only use the digital output of the sensor (as it is not availabl
 
 The sensor is read by the ESP32 and it is physically placed near the door to be controlled. The door spot where the sensor is sensing the position may be painted in white or have any white paper/plastic attached to improve the detection.
 
-Sensor levels:
-    - Logical '1': Object is FAR
-    - Logical '0': Object is NEAR
+Sensor digital levels meaning:
+
+* Logical '1': Object is FAR
+* Logical '0': Object is NEAR
