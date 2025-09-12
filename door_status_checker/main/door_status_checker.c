@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "soc/clk_tree_defs.h"
 #include "esp_timer.h"
+#include "freertos/queue.h"
 
 // Defines and constants
 #define LED_PIN         32
@@ -20,8 +21,9 @@
 #define IR_SENSOR_US_FOR_STATUS_CHANGE          IR_SENSOR_SECONDS_FOR_STATUS_CHANGE * 1000000
 
 // TASKS time definition
-#define IR_SENSOR_TASK_TIME         100
-#define BLINKING_LED_TASK_TIME      500
+#define IR_SENSOR_TASK_TIME                 100
+#define OPEN_BLINKING_LED_TASK_TIME         200
+#define CLOSED_BLINKING_LED_TASK_TIME       1000
 
 // Structs definition
 typedef enum
@@ -37,6 +39,9 @@ typedef struct
     int last_change_timestamp;
     bool computing_new_status;
 }ir_sensor_data_t;
+
+// Shared variables
+QueueHandle_t shared_queue;
 
 //******************************************************************/
 //********************** TASK IR SENSOR ****************************/
@@ -94,17 +99,18 @@ void ir_sensor_task(void *pv_parameters)
                 if(ir_sensor_data.status_change_counter >= 0)
                 {
                     ir_sensor_data.current_status = OPEN;
+
                 }
                 else
                 {
                     ir_sensor_data.current_status = CLOSED;
                 }
+                xQueueSend(shared_queue, &ir_sensor_data.current_status, portMAX_DELAY);
                 ESP_LOGI("IR_SENSOR_TASK", "Result: %d\n", ir_sensor_data.current_status);
 
             }
         }
-        
-        // ESP_LOGI("IR_SENSOR_TASK", "LEVEL: %d\n", ir_sensor_data.current_status);
+
         vTaskDelay(pdMS_TO_TICKS(IR_SENSOR_TASK_TIME));
     }
 }
@@ -115,8 +121,21 @@ void ir_sensor_task(void *pv_parameters)
 void led_blinking_task(void *pv_parameters)
 {
     uint8_t led_status = 0;
+    int current_blinking_period = OPEN_BLINKING_LED_TASK_TIME;
+    int shared_data = 0;
     while(1)
     {
+        if (xQueueReceive(shared_queue, &shared_data, 0)) {
+            if(shared_data == OPEN)
+            {
+                current_blinking_period = OPEN_BLINKING_LED_TASK_TIME;
+            }
+            else
+            {
+                current_blinking_period = CLOSED_BLINKING_LED_TASK_TIME;
+            }
+        }
+
         // Toggle LED
         led_status++;
         if(led_status > 1)
@@ -124,8 +143,7 @@ void led_blinking_task(void *pv_parameters)
             led_status = 0;
         }
         gpio_set_level(LED_PIN, led_status);
-        vTaskDelay(pdMS_TO_TICKS(BLINKING_LED_TASK_TIME));
-
+        vTaskDelay(pdMS_TO_TICKS(current_blinking_period));
     }
 
 }
@@ -137,7 +155,9 @@ void led_blinking_task(void *pv_parameters)
 static void init_config(void)
 {
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);  
-    gpio_set_direction(SENSOR_PIN, GPIO_MODE_INPUT);   
+    gpio_set_direction(SENSOR_PIN, GPIO_MODE_INPUT);  
+    
+    shared_queue = xQueueCreate(1, sizeof(int));
  
 }
 
