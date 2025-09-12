@@ -37,3 +37,8 @@ allow_anonymous true
 
 
 sudo systemctl restart mosquitto
+
+
+## Python parser
+pip install paho-mqtt
+
