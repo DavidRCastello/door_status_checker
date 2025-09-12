@@ -36,12 +36,10 @@
 #define OPEN_BLINKING_LED_TASK_TIME         200
 #define CLOSED_BLINKING_LED_TASK_TIME       1000
 
-// WIFI constants
-#define WIFI_SSID      "MIWIFI_bGYG"
-#define WIFI_PASS      "ROUTER_314159"
-// Event group bits
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+// WiFi variables
+const char *wifi_ssid = "MIWIFI_bGYG";
+const char *wifi_pass = "ROUTER_314159";
+int wifi_retry_num = 5;
 
 // Structs definition
 typedef enum
@@ -61,11 +59,6 @@ typedef struct
 // Shared variables
 QueueHandle_t shared_queue;
 
-// WIFI variables
-static EventGroupHandle_t s_wifi_event_group;
-static int s_retry_num = 0;
-static const int MAX_RETRY = 5;  
-
 //******************************************************************/
 //********************** TASK IR SENSOR ****************************/
 //******************************************************************/
@@ -77,7 +70,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI("MQTT", "Connected to broker");
             // Publish once after connecting
-            esp_mqtt_client_publish(mqtt_client, "test", "Hello from ESP32", 0, 1, 0);
+            // esp_mqtt_client_publish(mqtt_client, "test", "Hello from ESP32", 0, 1, 0);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW("MQTT", "Disconnected from broker");
@@ -118,8 +111,7 @@ void ir_sensor_task(void *pv_parameters)
                 ir_sensor_data.last_change_timestamp = esp_timer_get_time();
                 ir_sensor_data.computing_new_status = true;
                 ir_sensor_data.status_change_counter = 0;
-                ESP_LOGI("IR_SENSOR_TASK", "Starting computing...");
-
+                ESP_LOGI("IR_SENSOR_TASK", "Start computing...");
             }
         }
         else
@@ -147,8 +139,17 @@ void ir_sensor_task(void *pv_parameters)
                     ir_sensor_data.current_status = CLOSED;
                 }
                 xQueueSend(shared_queue, &ir_sensor_data.current_status, portMAX_DELAY);
-                ESP_LOGI("IR_SENSOR_TASK", "Result: %d\n", ir_sensor_data.current_status);
 
+                if(ir_sensor_data.current_status == OPEN)
+                {
+                    ESP_LOGI("IR_SENSOR_TASK", "Result: OPEN\n");
+                    esp_mqtt_client_publish(mqtt_client, "test", "OPEN", 0, 1, 0);
+                }
+                else
+                {
+                    ESP_LOGI("IR_SENSOR_TASK", "Result: CLOSED\n");
+                    esp_mqtt_client_publish(mqtt_client, "test", "CLOSED", 0, 1, 0);
+                }
             }
         }
 
@@ -218,125 +219,62 @@ static void mqtt_client_start()
     // 4. Start client
     esp_mqtt_client_start(mqtt_client);
 }
-
-/* WiFi event handler */
-static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_EVENT) {
-        switch(event_id) {
-        case WIFI_EVENT_STA_START:
-            ESP_LOGI("WIFI", "WIFI_EVENT_STA_START -> connecting...");
+static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
+    if(event_id == WIFI_EVENT_STA_START)
+    {
+        printf("WIFI CONNECTING....\n");
+    }
+    else if (event_id == WIFI_EVENT_STA_CONNECTED)
+    {
+        printf("WiFi CONNECTED\n");
+    }
+    else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        printf("WiFi lost connection\n");
+        if(wifi_retry_num < 5)
+        {
             esp_wifi_connect();
-            break;
-
-        case WIFI_EVENT_STA_DISCONNECTED:
-            /* Called when disconnected. Try to reconnect with limited retries. */
-            if (s_retry_num < MAX_RETRY) {
-                esp_wifi_connect();
-                s_retry_num++;
-                ESP_LOGI("WIFI", "Retrying to connect to the AP (%d/%d)", s_retry_num, MAX_RETRY);
-            } else {
-                xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-                ESP_LOGI("WIFI", "Failed to connect after %d attempts.", MAX_RETRY);
-            }
-            ESP_LOGI("WIFI", "WIFI_EVENT_STA_DISCONNECTED");
-            break;
-
-        default:
-            break;
-        }
-    } else if (event_base == IP_EVENT) {
-        if (event_id == IP_EVENT_STA_GOT_IP) {
-            ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-            ESP_LOGI("WIFI", "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-            s_retry_num = 0;
-            xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+            wifi_retry_num++;
+            printf("Retrying to Connect...\n");
         }
     }
-}
-
-// Initialize WiFi station and attempt to connect
-void wifi_init_sta(void)
-{
-    s_wifi_event_group = xEventGroupCreate();
-
-    // Initialize TCP/IP network interface (must be first)
-    ESP_ERROR_CHECK(esp_netif_init());
-
-    // 2. Initialize NVS — required by WiFi (if not already initialized)
-    // nvs_flash_init() should be done in app_main before calling wifi code.
-    // (We show it in app_main below.)
-
-    // Create default WiFi station 
-    esp_netif_create_default_wifi_sta();
-
-    // Init WiFi with default config
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-
-    // Register event handlers for WIFI and IP events
-    ESP_ERROR_CHECK( esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        NULL) );
-    ESP_ERROR_CHECK( esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        NULL) );
-
-    // Configure the WiFi credentials (station mode)
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-            /* Optional: set to true to allow connecting to APs without password (open) */
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-            .pmf_cfg = {
-                .capable = true,
-                .required = false
-            },
-        },
-    };
-
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
-
-    ESP_LOGI("WIFI", "wifi_init_sta finished.");
-
-    /* Wait for connection or fail event */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                           pdTRUE,
-                                           pdFALSE,
-                                           pdMS_TO_TICKS(10000)); // optional timeout
-
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI("WIFI", "Connected to AP: %s", WIFI_SSID);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI("WIFI", "Failed to connect to SSID:%s", WIFI_SSID);
-    } else {
-        ESP_LOGI("WIFI", "Connection timed out");
+    else if (event_id == IP_EVENT_STA_GOT_IP)
+    {
+        printf("Wifi got IP...\n\n");
     }
 }
-
 static void wifi_start()
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
+    // Init NVS flash
+    nvs_flash_init();
 
-    /* 2. Init logging and network stack & start wifi */
-    ESP_LOGI("WIFI", "Starting WiFi");
-    wifi_init_sta();
-
+    // Wi-Fi Configuration Phase
+    esp_netif_init();
+    esp_event_loop_create_default();     // event loop                    s1.2
+    esp_netif_create_default_wifi_sta(); // WiFi station                      s1.3
+    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&wifi_initiation); //     
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
+    wifi_config_t wifi_configuration = {
+        .sta = {
+            .ssid = "",
+            .password = "",
+            
+           }
+    
+        };
+    strcpy((char*)wifi_configuration.sta.ssid, wifi_ssid);
+    strcpy((char*)wifi_configuration.sta.password, wifi_pass);    
+    esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_configuration);
+    // Wi-Fi Start Phase
+    esp_wifi_start();
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    // Wi-Fi Connect Phase
+    esp_wifi_connect();
+    printf( "wifi_init_softap finished. SSID:%s  password:%s", wifi_ssid, wifi_pass);
 }
+
 void app_main(void)
 {
     // INIT GPIO and peripherals
