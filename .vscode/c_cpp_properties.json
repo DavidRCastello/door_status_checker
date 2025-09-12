@@ -4,6 +4,7 @@
             "name": "door_status_checker",
             "includePath": [
                 "${workspaceFolder}/**",
+                "${workspaceFolder}/door_status_checker/build/config",
                 "D:\\Projects\\esp32\\esp-idf\\components\\**",
                 "D:\\Projects\\esp32\\esp-idf\\components\\freertos\\FreeRTOS-Kernel\\portable\\xtensa\\include\\freertos\\**",
                 "D:\\Projects\\esp32\\esp-idf\\components\\freertos\\FreeRTOS-Kernel\\include\\freertos\\**",

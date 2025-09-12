@@ -3,6 +3,8 @@
 // FreeRTOS includes
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
+#include "freertos/event_groups.h"
 
 // ESP32 library includes for peripherals
 #include "freertos/timers.h"
@@ -11,6 +13,15 @@
 #include "soc/clk_tree_defs.h"
 #include "esp_timer.h"
 #include "freertos/queue.h"
+#include "mqtt_client.h"
+#include <string.h>
+#include "esp_err.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
+#include "lwip/err.h"
+#include "lwip/sys.h"
 
 // Defines and constants
 #define LED_PIN         32
@@ -24,6 +35,13 @@
 #define IR_SENSOR_TASK_TIME                 100
 #define OPEN_BLINKING_LED_TASK_TIME         200
 #define CLOSED_BLINKING_LED_TASK_TIME       1000
+
+// WIFI constants
+#define WIFI_SSID      "MIWIFI_bGYG"
+#define WIFI_PASS      "ROUTER_314159"
+// Event group bits
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
 
 // Structs definition
 typedef enum
@@ -43,9 +61,32 @@ typedef struct
 // Shared variables
 QueueHandle_t shared_queue;
 
+// WIFI variables
+static EventGroupHandle_t s_wifi_event_group;
+static int s_retry_num = 0;
+static const int MAX_RETRY = 5;  
+
 //******************************************************************/
 //********************** TASK IR SENSOR ****************************/
 //******************************************************************/
+static esp_mqtt_client_handle_t mqtt_client = NULL;
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+    esp_mqtt_event_handle_t event = event_data;
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI("MQTT", "Connected to broker");
+            // Publish once after connecting
+            esp_mqtt_client_publish(mqtt_client, "test", "Hello from ESP32", 0, 1, 0);
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGW("MQTT", "Disconnected from broker");
+            break;
+        default:
+            break;
+    }
+}
+
 int compute_time_diff(int old_timestamp)
 {
     int new_time = esp_timer_get_time();
@@ -161,11 +202,152 @@ static void init_config(void)
  
 }
 
+static void mqtt_client_start()
+{
+    // 1. Configure the client
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = "mqtt://192.168.1.159:1883",  // <-- Change to your RPi's IP
+    };
+
+    // 2. Init client
+    mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+
+    // 3. Register event handler
+    esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+
+    // 4. Start client
+    esp_mqtt_client_start(mqtt_client);
+}
+
+/* WiFi event handler */
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT) {
+        switch(event_id) {
+        case WIFI_EVENT_STA_START:
+            ESP_LOGI("WIFI", "WIFI_EVENT_STA_START -> connecting...");
+            esp_wifi_connect();
+            break;
+
+        case WIFI_EVENT_STA_DISCONNECTED:
+            /* Called when disconnected. Try to reconnect with limited retries. */
+            if (s_retry_num < MAX_RETRY) {
+                esp_wifi_connect();
+                s_retry_num++;
+                ESP_LOGI("WIFI", "Retrying to connect to the AP (%d/%d)", s_retry_num, MAX_RETRY);
+            } else {
+                xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+                ESP_LOGI("WIFI", "Failed to connect after %d attempts.", MAX_RETRY);
+            }
+            ESP_LOGI("WIFI", "WIFI_EVENT_STA_DISCONNECTED");
+            break;
+
+        default:
+            break;
+        }
+    } else if (event_base == IP_EVENT) {
+        if (event_id == IP_EVENT_STA_GOT_IP) {
+            ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+            ESP_LOGI("WIFI", "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+            s_retry_num = 0;
+            xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        }
+    }
+}
+
+// Initialize WiFi station and attempt to connect
+void wifi_init_sta(void)
+{
+    s_wifi_event_group = xEventGroupCreate();
+
+    // Initialize TCP/IP network interface (must be first)
+    ESP_ERROR_CHECK(esp_netif_init());
+
+    // 2. Initialize NVS — required by WiFi (if not already initialized)
+    // nvs_flash_init() should be done in app_main before calling wifi code.
+    // (We show it in app_main below.)
+
+    // Create default WiFi station 
+    esp_netif_create_default_wifi_sta();
+
+    // Init WiFi with default config
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+
+    // Register event handlers for WIFI and IP events
+    ESP_ERROR_CHECK( esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL) );
+    ESP_ERROR_CHECK( esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL) );
+
+    // Configure the WiFi credentials (station mode)
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+            /* Optional: set to true to allow connecting to APs without password (open) */
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .pmf_cfg = {
+                .capable = true,
+                .required = false
+            },
+        },
+    };
+
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+    ESP_ERROR_CHECK( esp_wifi_start() );
+
+    ESP_LOGI("WIFI", "wifi_init_sta finished.");
+
+    /* Wait for connection or fail event */
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdTRUE,
+                                           pdFALSE,
+                                           pdMS_TO_TICKS(10000)); // optional timeout
+
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI("WIFI", "Connected to AP: %s", WIFI_SSID);
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGI("WIFI", "Failed to connect to SSID:%s", WIFI_SSID);
+    } else {
+        ESP_LOGI("WIFI", "Connection timed out");
+    }
+}
+
+static void wifi_start()
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    /* 2. Init logging and network stack & start wifi */
+    ESP_LOGI("WIFI", "Starting WiFi");
+    wifi_init_sta();
+
+}
 void app_main(void)
 {
     // INIT GPIO and peripherals
     init_config();
     
+    // Connect to WIFI network
+    wifi_start();
+
+    // Start MQTT
+    mqtt_client_start();
+
     // Start the tasks to run
     xTaskCreate(led_blinking_task, "Blink Task", 2048, NULL, 1, NULL);
     xTaskCreate(ir_sensor_task, "IR Sensor Task", 2048, NULL, 5, NULL);

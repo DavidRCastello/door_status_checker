@@ -17,3 +17,23 @@ Sensor digital levels meaning:
 
 * Logical '1': Object is FAR
 * Logical '0': Object is NEAR
+
+## MQTT Broker in RPi3
+
+sudo apt-get install mosquitto mosquitto-clients
+sudo systemctl enable mosquitto.service
+
+In localhost
+mosquitto_sub -d -h localhost -p 1883 -t "test"
+mosquitto_pub -d -h localhost -p 1883 -t "test" -m "Hello world"
+
+If you want to send data from another machine, the port shall be opened from incoming connections:
+
+sudo nano /etc/mosquitto/mosquitto.conf
+Add or modify:
+
+listener 1883
+allow_anonymous true
+
+
+sudo systemctl restart mosquitto
