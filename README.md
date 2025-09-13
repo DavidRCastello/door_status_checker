@@ -39,6 +39,7 @@ allow_anonymous true
 sudo systemctl restart mosquitto
 
 
-## Python parser
-pip install paho-mqtt
+## Python parser in RPi
+sudo apt install python3-paho-mqtt
+
 
