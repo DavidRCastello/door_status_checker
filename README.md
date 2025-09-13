@@ -43,3 +43,14 @@ sudo systemctl restart mosquitto
 sudo apt install python3-paho-mqtt
 
 
+## Database
+sudo apt-get install sqlite3
+
+sqlite3 door_data.db
+
+CREATE TABLE door_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT (datetime('now','localtime')),
+    status TEXT NOT NULL
+);
+
